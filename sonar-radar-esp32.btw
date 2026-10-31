@@ -1,0 +1,190 @@
+%BTW 1
+;; BenchTwin project file. Open it in BenchTwin (benchtwin.com): Share / Import, or drag it onto the bench.
+;; Holds the circuit, the code and the 3D models. Units: millimetres and degrees.
+
+@PROJECT name="Sonar radar ESP32" app="3.64.8" saved="2026-10-30T18:56:02.984Z" bench="508x355.6" next=79
+@BODY u75 shape-box x=-11 z=109 rot=0 label="Base board"
+  +set cut=no arrN=1 arrGap=2 arrAxis="x" mirX=no mirOff=0 smooth=no sides=6
+  +set points=5 twist=0 taper=100 bend=0 turns=5 wire=1.2 mat="pla" rotX=0
+  +set rotZ=0 w=130 d=135 h=6 y=0 rotDeg=0 color="#c9a46c" ghost=no
+  +set wall=2 radius=3 hole=3.2
+@PART u74 bb-170-white x=-51 z=69.5 rot=3 label="Power strip" sku="bb-170-white"
+  +set fix="tape" mount="u75"
+@PART u71 servo x=13 z=68.5 rot=0 label="Turret servo"
+  +set fix="bracket" mount="u75"
+@BODY u72 shape-box x=7.5 z=60.5 rot=0 label="Turret plate"
+  +set cut=no arrN=1 arrGap=2 arrAxis="x" mirX=no mirOff=0 smooth=no sides=6
+  +set points=5 twist=0 taper=100 bend=0 turns=5 wire=1.2 mat="pla" rotX=0
+  +set rotZ=0 w=50 d=26 h=3 y=37.6 rotDeg=0 color="#3c4a57" ghost=no
+  +set wall=2 radius=3 hole=3.2 fix="horn" mount="u71"
+@PART u73 hcsr04 x=7.5 z=60.5 rot=0 label="Sonar"
+  +set distance=100 fix="glue" rotX=-90 mount="u72"
+@PART u76 mc-esp32-devkitc-wroom-32e x=-49 z=127.5 rot=3 label="Board 1"
+@PART u77 tft-ili9341-28-spi x=2 z=131.5 rot=0 label="DS1"
+@PART u78 res x=-21 z=66 rot=0 label="R1" sku="res-cf14-1k"
+  +set ohms=1000 lift=0
+@PART u79 res x=-70 z=118 rot=3 label="R2" sku="res-cf14-2k"
+  +set ohms=2000 lift=1
+@WIRE from="u71|GND" to="u74|j4"
+@WIRE from="u76|GND" to="u74|i4"
+@WIRE from="u71|VCC" to="u74|j1"
+@WIRE from="u74|f1" to="u76|5V"
+@WIRE from="u76|IO13" to="u71|SIG"
+@WIRE from="u74|g1" to="u73|VCC"
+@WIRE from="u74|h4" to="u73|GND"
+@WIRE from="u76|IO12" to="u73|TRIG"
+@WIRE from="u76|IO14" to="u78|1"
+@WIRE from="u78|2" to="u73|ECHO"
+@WIRE from="u76|IO14" to="u79|1"
+@WIRE from="u79|2" to="u74|g4"
+@WIRE from="u77|VCC" to="u76|3V3"
+@WIRE from="u77|GND" to="u76|GND#3"
+@WIRE from="u77|LED" to="u76|3V3"
+@WIRE from="u77|CS" to="u76|IO25"
+@WIRE from="u77|RESET" to="u76|IO27"
+@WIRE from="u77|DC" to="u76|IO26"
+@WIRE from="u77|SDI" to="u76|IO32"
+@WIRE from="u77|SCK" to="u76|IO33"
+@WIRE from="u77|SDO" to="u76|IO4"
+@CODE lang=arduino lines=140
+| #include <TFT_eSPI.h>
+| #include <ESP32Servo.h>
+| 
+| // ---------- Pins ----------
+| #define TRIG_PIN   12
+| #define ECHO_PIN   14
+| #define SERVO_PIN  13
+| 
+| // ---------- Radar parameters ----------
+| const int   SWEEP_MIN_DEG   = 15;
+| const int   SWEEP_MAX_DEG   = 165;
+| const int   SWEEP_STEP_DEG  = 2;      // angular resolution
+| const int   STEP_DELAY_MS   = 40;     // let the servo settle before pinging
+| const float MAX_RANGE_CM    = 200.0;  // HC-SR04 reliable range ~2-400cm
+| 
+| // ---------- Display geometry ----------
+| const int SCREEN_W   = 320;
+| const int SCREEN_H   = 240;
+| const int ORIGIN_X   = SCREEN_W / 2;
+| const int ORIGIN_Y   = SCREEN_H - 10;
+| const int RADIUS_PX  = 200;           // on-screen radius for MAX_RANGE_CM
+| 
+| TFT_eSPI tft = TFT_eSPI();
+| Servo    sonarServo;
+| 
+| int   currentAngle   = SWEEP_MIN_DEG;
+| int   sweepDirection = 1;
+| 
+| struct Blip {
+|   int   angle;
+|   float distanceCm;
+|   bool  active;
+| };
+| const int MAX_BLIPS = 90;
+| Blip blips[MAX_BLIPS];
+| 
+| void setup() {
+|   Serial.begin(115200);
+| 
+|   pinMode(TRIG_PIN, OUTPUT);
+|   pinMode(ECHO_PIN, INPUT);
+| 
+|   sonarServo.attach(SERVO_PIN, 500, 2400);
+|   sonarServo.write(currentAngle);
+| 
+|   tft.init();
+|   tft.setRotation(1);            // landscape; adjust 0-3 to match your wiring
+|   tft.fillScreen(TFT_BLACK);
+| 
+|   for (int i = 0; i < MAX_BLIPS; i++) blips[i].active = false;
+| 
+|   drawRadarGrid();
+| }
+| 
+| void loop() {
+|   sonarServo.write(currentAngle);
+|   delay(STEP_DELAY_MS);
+| 
+|   float distanceCm = measureDistanceCm();
+|   recordBlip(currentAngle, distanceCm);
+| 
+|   drawRadarGrid();
+|   drawSweepLine(currentAngle);
+|   drawBlips();
+| 
+|   Serial.printf("angle=%3d  distance=%.1f cm\n", currentAngle, distanceCm);
+| 
+|   currentAngle += sweepDirection * SWEEP_STEP_DEG;
+|   if (currentAngle >= SWEEP_MAX_DEG) {
+|     currentAngle = SWEEP_MAX_DEG;
+|     sweepDirection = -1;
+|   } else if (currentAngle <= SWEEP_MIN_DEG) {
+|     currentAngle = SWEEP_MIN_DEG;
+|     sweepDirection = 1;
+|   }
+| }
+| 
+| // ---------- Sensing ----------
+| float measureDistanceCm() {
+|   digitalWrite(TRIG_PIN, LOW);
+|   delayMicroseconds(2);
+|   digitalWrite(TRIG_PIN, HIGH);
+|   delayMicroseconds(10);
+|   digitalWrite(TRIG_PIN, LOW);
+| 
+|   long durationUs = pulseIn(ECHO_PIN, HIGH, 30000UL);  // 30ms timeout
+|   if (durationUs == 0) return -1;                      // no echo received
+| 
+|   float distanceCm = (durationUs * 0.0343f) / 2.0f;
+|   if (distanceCm < 2 || distanceCm > 400) return -1;   // outside sensor spec
+|   return distanceCm;
+| }
+| 
+| void recordBlip(int angle, float distanceCm) {
+|   int slot = (angle - SWEEP_MIN_DEG) / SWEEP_STEP_DEG;
+|   if (slot < 0 || slot >= MAX_BLIPS) return;
+| 
+|   if (distanceCm > 0 && distanceCm <= MAX_RANGE_CM) {
+|     blips[slot].angle      = angle;
+|     blips[slot].distanceCm = distanceCm;
+|     blips[slot].active     = true;
+|   } else {
+|     blips[slot].active = false;
+|   }
+| }
+| 
+| // ---------- Drawing ----------
+| void drawRadarGrid() {
+|   tft.fillScreen(TFT_BLACK);
+| 
+|   for (int r = RADIUS_PX / 4; r <= RADIUS_PX; r += RADIUS_PX / 4) {
+|     tft.drawCircle(ORIGIN_X, ORIGIN_Y, r, TFT_DARKGREEN);
+|   }
+| 
+|   for (int a = 0; a <= 180; a += 45) {
+|     int x = ORIGIN_X + RADIUS_PX * cos(radians(180 - a));
+|     int y = ORIGIN_Y - RADIUS_PX * sin(radians(180 - a));
+|     tft.drawLine(ORIGIN_X, ORIGIN_Y, x, y, TFT_DARKGREEN);
+|   }
+| 
+|   tft.drawLine(0, ORIGIN_Y, SCREEN_W, ORIGIN_Y, TFT_DARKGREEN);
+| }
+| 
+| void drawSweepLine(int angle) {
+|   int x = ORIGIN_X + RADIUS_PX * cos(radians(180 - angle));
+|   int y = ORIGIN_Y - RADIUS_PX * sin(radians(180 - angle));
+|   tft.drawLine(ORIGIN_X, ORIGIN_Y, x, y, TFT_GREEN);
+| }
+| 
+| void drawBlips() {
+|   for (int i = 0; i < MAX_BLIPS; i++) {
+|     if (!blips[i].active) continue;
+| 
+|     float rPx = map(blips[i].distanceCm * 10, 0, MAX_RANGE_CM * 10, 0, RADIUS_PX);
+|     int x = ORIGIN_X + rPx * cos(radians(180 - blips[i].angle));
+|     int y = ORIGIN_Y - rPx * sin(radians(180 - blips[i].angle));
+| 
+|     tft.fillCircle(x, y, 3, TFT_YELLOW);
+|   }
+| }
+@END parts=9 wires=21 crc32=59C1FFF8
