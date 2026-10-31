@@ -69,3 +69,4 @@ Open `sonar-radar.btw` at [benchtwin.com](https://benchtwin.com/) (drop it onto 
 - `SWEEP_STEP_DEG` — angular resolution; smaller steps look smoother but scan slower
 - `MAX_RANGE_CM` — detection ceiling; HC-SR04 gets unreliable past ~300–400cm
 - `STEP_DELAY_MS` — time given for the servo to settle before each ping
+<img width="1256" height="591" alt="image" src="https://github.com/user-attachments/assets/18e616dd-4975-4fb5-bb56-02360c11e698" />
